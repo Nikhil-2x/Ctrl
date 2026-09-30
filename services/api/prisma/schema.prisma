@@ -1,0 +1,246 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Project
+model VideoProject {
+  id        String   @id @default(cuid())
+  topic     String
+  hook      String?
+  status    String   @default("CREATED")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stories        Story[]
+  generationJobs GenerationJob[]
+  artifacts      Artifact[]
+  qualityEvals   QualityEvaluation[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Story
+model Story {
+  id        String   @id @default(cuid())
+  projectId String
+  content   String
+  sceneDAG  Json
+  status    String   @default("CREATED")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenes  Scene[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+// Scene
+model Scene {
+  id              String   @id @default(cuid())
+  storyId         String
+  projectId       String
+  sceneOrder      Int
+  duration        Float
+  narration       String
+  visualPrompt    Json
+  dependencies    Json     @default("[]")
+  status          String   @default("QUEUED")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  story          Story              @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  generationJobs GenerationJob[]
+  artifacts      Artifact[]
+  qualityEvals   QualityEvaluation[]
+
+  @@index([storyId])
+  @@index([projectId])
+  @@index([status])
+}
+
+// Generation Job
+model GenerationJob {
+  id              String   @id @default(cuid())
+  projectId       String
+  sceneId         String
+  type            String   // IMAGE, VIDEO, AUDIO, ASSEMBLY
+  status          String   @default("QUEUED")
+  model           String
+  provider        String
+  attempt         Int      @default(1)
+  maxAttempts     Int      @default(3)
+  priority        Int      @default(5)
+  idempotencyKey  String   @unique
+  workerId        String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failureType     String?
+  failureReason   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project       VideoProject  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene         Scene          @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  artifacts     Artifact[]
+  retryAttempts RetryAttempt[]
+
+  @@unique([idempotencyKey])
+  @@index([projectId])
+  @@index([sceneId])
+  @@index([status])
+  @@index([workerId])
+  @@index([createdAt])
+}
+
+// Artifact
+model Artifact {
+  id         String   @id @default(cuid())
+  projectId  String
+  sceneId    String
+  jobId      String
+  type       String   // IMAGE, VIDEO, AUDIO, FRAME
+  storageKey String
+  hash       String
+  model      String
+  promptHash String
+  seed       Int?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project         VideoProject        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene           Scene               @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  generationJob   GenerationJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  qualityEvals    QualityEvaluation[]
+  cacheEntries    CacheEntry[]
+  referenceFrames ReferenceFrame[]
+
+  @@unique([jobId])
+  @@index([projectId])
+  @@index([sceneId])
+  @@index([hash])
+  @@index([promptHash])
+}
+
+// Retry Attempt
+model RetryAttempt {
+  id              String   @id @default(cuid())
+  jobId           String
+  attempt         Int
+  failureType     String
+  failureReason   String?
+  retryStrategy   String? // semantic retry strategy
+  newModel        String?
+  newPrompt       String?
+  referenceFrameId String?
+  createdAt       DateTime @default(now())
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([attempt])
+}
+
+// Quality Evaluation
+model QualityEvaluation {
+  id               String   @id @default(cuid())
+  projectId        String
+  sceneId          String
+  artifactId       String
+  visualScore      Float    @default(0)
+  audioScore       Float    @default(0)
+  narrativeScore   Float    @default(0)
+  technicalScore   Float    @default(0)
+  overallScore     Float    @default(0)
+  passed           Boolean  @default(false)
+  failureType      String?
+  feedback         String?
+  createdAt        DateTime @default(now())
+
+  project  VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene    Scene        @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  artifact Artifact     @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([sceneId])
+  @@index([passed])
+}
+
+// Worker
+model Worker {
+  id              String   @id @default(cuid())
+  type            String   // IMAGE, VIDEO, AUDIO, ASSEMBLY, QA
+  status          String   @default("HEALTHY")
+  currentJobId    String?
+  lastHeartbeat   DateTime @default(now())
+  gpuInfo         Json?
+  successCount    Int      @default(0)
+  failureCount    Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([lastHeartbeat])
+}
+
+// Model Registry
+model Model {
+  id             String   @id @default(cuid())
+  name           String
+  provider       String
+  capabilities   Json     // array of capabilities
+  health         Json     // ModelHealth
+  config         Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([provider, name])
+  @@index([provider])
+}
+
+// Cache Entry
+model CacheEntry {
+  id           String   @id @default(cuid())
+  promptHash   String
+  embedding    Float[] @default([]) // pgvector
+  prompt       String
+  sceneType    String
+  style        String?
+  model        String
+  qualityScore Float
+  artifactId   String
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@unique([promptHash, model])
+  @@index([promptHash])
+  @@index([qualityScore])
+}
+
+// Reference Frame
+model ReferenceFrame {
+  id         String   @id @default(cuid())
+  artifactId String
+  frameIndex Int
+  storageKey String
+  hash       String
+  createdAt  DateTime @default(now())
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@index([artifactId])
+  @@index([hash])
+}
